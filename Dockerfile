@@ -109,7 +109,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends git
 # to support cloud-based filesystems
 RUN git clone --recursive https://github.com/Microsoft/onnxruntime && \
     (cd onnxruntime && \
-            git checkout c0acb8b6c3b2e3e174627dcb3100009e97c2293d && \
+            git checkout 3c3186c761463b9320b94bd02f37b303d0069494 && \
             git submodule update)
 
 ENV PATH="/opt/cmake/bin:${PATH}"
