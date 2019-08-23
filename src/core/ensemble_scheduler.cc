@@ -38,6 +38,23 @@ namespace nvidia { namespace inferenceserver {
 
 namespace {
 
+bool
+BackendSupportGPUInput(const std::shared_ptr<InferenceBackend>& backend)
+{
+  const auto& config = backend->Config();
+  if (config.platform() == kTensorRTPlanPlatform) {
+    return true;
+  }
+  // [TODO] update once the following backends are updated
+  // kTensorFlowGraphDefPlatform
+  // kTensorFlowSavedModelPlatform
+  // kCaffe2NetDefPlatform
+  // kOnnxRuntimeOnnxPlatform
+  // kPyTorchLibTorchPlatform
+  // kCustomPlatform
+  return false;
+}
+
 // Step specifies the backend, providers and status objects used for
 // the internal infer request
 struct Step {
@@ -48,6 +65,7 @@ struct Step {
   std::shared_ptr<InferResponseProvider> response_provider_;
   std::unordered_map<std::string, std::shared_ptr<AllocatedSystemMemory>>
       output_map_;
+  std::unordered_map<std::string, bool> output_on_gpu_;
   Status infer_status_;
 
   size_t step_idx_;
@@ -269,26 +287,37 @@ EnsembleContext::ResponseAlloc(
     const char* tensor_name, size_t byte_size,
     TRTSERVER_Memory_Type memory_type, int64_t memory_type_id, void* userp)
 {
-  auto tensor_data_map = reinterpret_cast<
-      std::unordered_map<std::string, std::shared_ptr<AllocatedSystemMemory>>*>(
-      userp);
+  auto step = reinterpret_cast<Step*>(userp);
 
   *buffer = nullptr;
   *buffer_userp = nullptr;
 
-  auto allocated_buffer =
-      std::make_shared<AllocatedSystemMemory>(byte_size, memory_type);
-
-  TRTSERVER_Memory_Type allocated_memory_type;
-  auto mutable_buffer = allocated_buffer->MutableBuffer(&allocated_memory_type);
-  if ((mutable_buffer != nullptr) || (byte_size == 0)) {
-    if (byte_size != 0) {
-      *buffer = static_cast<void*>(mutable_buffer);
-    }
-    tensor_data_map->emplace(tensor_name, std::move(allocated_buffer));
+  if (byte_size == 0) {
+    step->output_map_.emplace(
+        tensor_name,
+        std::make_shared<AllocatedSystemMemory>(byte_size, memory_type));
     LOG_VERBOSE(1) << "Internal response allocation: " << tensor_name
                    << ", size " << byte_size << ", addr " << *buffer
-                   << ", memory type " << allocated_memory_type;
+                   << ", memory type " << memory_type;
+  } else {
+    // If request output to be on GPU, check if it is preferred in respect to
+    // the ensemble
+    if ((memory_type != TRTSERVER_MEMORY_GPU) ||
+        (step->output_on_gpu_[tensor_name])) {
+      auto allocated_buffer =
+          std::make_shared<AllocatedSystemMemory>(byte_size, memory_type);
+
+      TRTSERVER_Memory_Type allocated_memory_type;
+      auto mutable_buffer =
+          allocated_buffer->MutableBuffer(&allocated_memory_type);
+      if (mutable_buffer != nullptr) {
+        *buffer = static_cast<void*>(mutable_buffer);
+        step->output_map_.emplace(tensor_name, std::move(allocated_buffer));
+        LOG_VERBOSE(1) << "Internal response allocation: " << tensor_name
+                       << ", size " << byte_size << ", addr " << *buffer
+                       << ", memory type " << allocated_memory_type;
+      }
+    }
   }
 
   return nullptr;  // Success
@@ -487,8 +516,23 @@ EnsembleContext::InitStep(size_t step_idx, std::shared_ptr<Step>* step)
   }
 
   // Set requested outputs in request header
+  // and set meta data for output allocation
+  std::unordered_map<std::string, bool> output_on_gpu;
   for (const auto& pair : info_->steps_[step_idx].output_to_tensor_) {
     request_header.add_output()->set_name(pair.first);
+    bool prefer_gpu = false;
+    for (size_t next_step_idx : info_->tensor_to_step_[pair.first]) {
+      auto& next_step = info_->steps_[next_step_idx];
+      auto& next_step_version_map = handles_[next_step.model_name_];
+      auto& next_step_backend = next_step_version_map[next_step.model_version_];
+      // Set output_on_gpu depending on both the platform and whether the
+      // backend has contexts on GPU.
+      // [TODO] this check can be pre-calcuated on ensemble backend creation
+      if (BackendSupportGPUInput(next_step_backend)) {
+        prefer_gpu |= next_step_backend->HasGPUContext();
+      }
+    }
+    output_on_gpu.emplace(pair.first, prefer_gpu);
   }
 
   request_header.set_correlation_id(correlation_id_);
@@ -498,6 +542,7 @@ EnsembleContext::InitStep(size_t step_idx, std::shared_ptr<Step>* step)
 
   step->reset(new Step(step_idx));
   (*step)->backend_ = backend;
+  (*step)->output_on_gpu_.swap(output_on_gpu);
   RETURN_IF_ERROR(InferRequestProvider::Create(
       info_->steps_[step_idx].model_name_,
       info_->steps_[step_idx].model_version_, request_header, input_map,
@@ -507,8 +552,7 @@ EnsembleContext::InitStep(size_t step_idx, std::shared_ptr<Step>* step)
   RETURN_IF_ERROR(InferResponseProvider::Create(
       (*step)->request_provider_->RequestHeader(),
       (*step)->backend_->GetLabelProvider(), allocator_.get(), ResponseAlloc,
-      &((*step)->output_map_), ResponseRelease,
-      &((*step)->response_provider_)));
+      step->get(), ResponseRelease, &((*step)->response_provider_)));
 
   return Status::Success;
 }
