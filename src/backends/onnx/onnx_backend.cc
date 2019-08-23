@@ -104,6 +104,7 @@ OnnxBackend::CreateExecutionContextsHelper(
     const std::unordered_map<std::string, std::string>& models)
 {
   uint32_t total_context_cnt = 0;
+  has_gpu_context_ = false;
 
   // Create a session for each instance.
   for (const auto& group : Config().instance_group()) {
@@ -121,6 +122,7 @@ OnnxBackend::CreateExecutionContextsHelper(
                                             std::to_string(gpu_device);
           RETURN_IF_ERROR(CreateExecutionContext(
               instance_name, gpu_device, session_options, models));
+          has_gpu_context_ = true;
           total_context_cnt++;
         }
       }

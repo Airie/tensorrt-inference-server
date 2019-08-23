@@ -131,6 +131,7 @@ PlanBackend::CreateExecutionContexts(
   std::lock_guard<std::mutex> glock(global_context_mu);
 
   uint32_t total_context_cnt = 0;
+  has_gpu_context_ = false;
 
   // Create a runtime/engine/context trifecta for each instance.
   //
@@ -154,6 +155,7 @@ PlanBackend::CreateExecutionContexts(
                                           std::to_string(gpu_device);
         RETURN_IF_ERROR(
             CreateExecutionContext(instance_name, gpu_device, models));
+        has_gpu_context_ = true;
         total_context_cnt++;
       }
     }

@@ -74,6 +74,7 @@ BaseBackend::CreateExecutionContexts(
   }
 
   uint32_t total_context_cnt = 0;
+  has_gpu_context_ = false;
 
   for (const auto& group : Config().instance_group()) {
     for (int c = 0; c < group.count(); c++) {
@@ -88,6 +89,8 @@ BaseBackend::CreateExecutionContexts(
             group.name() + "_" + std::to_string(c) + "_model_device";
         RETURN_IF_ERROR(CreateExecutionContext(
             instance_name, Context::MODEL_DEVICE, backend_config, paths));
+        // [TODO] Need to know whether the model device is on GPU
+        total_context_cnt++;
       } else {
         for (int gpu_device : group.gpus()) {
           const std::string instance_name = group.name() + "_" +
@@ -95,6 +98,7 @@ BaseBackend::CreateExecutionContexts(
                                             std::to_string(gpu_device);
           RETURN_IF_ERROR(CreateExecutionContext(
               instance_name, gpu_device, backend_config, paths));
+          has_gpu_context_ = true;
           total_context_cnt++;
         }
       }

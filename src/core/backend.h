@@ -59,6 +59,9 @@ class InferenceBackend {
     return metric_reporter_;
   }
 
+  // Return whether at least one backend context is deployed on GPU
+  bool HasGPUContext() const { return has_gpu_context_; }
+
   // Get the model configuration for a named input.
   Status GetInput(const std::string& name, const ModelInput** input) const;
 
@@ -96,6 +99,10 @@ class InferenceBackend {
 
   // Get the raw pointer to the scheduler of this backend.
   Scheduler* BackendScheduler() { return scheduler_.get(); }
+
+ protected:
+  // Whether at least one backend context is deployed on GPU
+  bool has_gpu_context_;
 
  private:
   // Configuration of the model that this backend represents.

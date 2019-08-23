@@ -85,6 +85,7 @@ CustomBackend::CreateExecutionContexts(
     const std::unordered_map<std::string, std::string>& libraries)
 {
   uint32_t total_context_cnt = 0;
+  has_gpu_context_ = false;
 
   // Create the context for each instance.
   for (const auto& group : Config().instance_group()) {
@@ -102,6 +103,7 @@ CustomBackend::CreateExecutionContexts(
                                             std::to_string(gpu_device);
           RETURN_IF_ERROR(
               CreateExecutionContext(instance_name, gpu_device, libraries));
+          has_gpu_context_ = true;
           total_context_cnt++;
         }
       }

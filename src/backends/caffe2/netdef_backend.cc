@@ -109,6 +109,7 @@ NetDefBackend::CreateExecutionContexts(
     const std::unordered_map<std::string, std::vector<char>>& models)
 {
   uint32_t total_context_cnt = 0;
+  has_gpu_context_ = false;
 
   // Create a workspace for each instance.
   //
@@ -129,6 +130,7 @@ NetDefBackend::CreateExecutionContexts(
                                             std::to_string(gpu_device);
           RETURN_IF_ERROR(
               CreateExecutionContext(instance_name, gpu_device, models));
+          has_gpu_context_ = true;
           total_context_cnt++;
         }
       }
