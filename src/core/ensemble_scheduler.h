@@ -55,6 +55,7 @@ struct EnsembleInfo {
     int64_t model_version_;
     std::unordered_map<std::string, std::string> input_to_tensor_;
     std::unordered_map<std::string, std::string> output_to_tensor_;
+    std::unordered_map<std::string, bool> output_on_gpu_;
   };
 
   std::string ensemble_name_;

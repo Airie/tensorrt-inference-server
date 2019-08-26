@@ -52,23 +52,28 @@ BackendSupportGPUInput(const std::shared_ptr<InferenceBackend>& backend)
   // kOnnxRuntimeOnnxPlatform
   // kPyTorchLibTorchPlatform
   // kCustomPlatform
+  // kEnsemblePlatform
   return false;
 }
 
 // Step specifies the backend, providers and status objects used for
 // the internal infer request
 struct Step {
-  Step(size_t step_idx) : step_idx_(step_idx) {}
+  Step(
+      size_t step_idx,
+      const std::unordered_map<std::string, bool>& output_on_gpu)
+      : step_idx_(step_idx), output_on_gpu_(output_on_gpu)
+  {
+  }
 
+  size_t step_idx_;
   std::shared_ptr<InferenceBackend> backend_;
   std::shared_ptr<InferRequestProvider> request_provider_;
   std::shared_ptr<InferResponseProvider> response_provider_;
   std::unordered_map<std::string, std::shared_ptr<AllocatedSystemMemory>>
       output_map_;
-  std::unordered_map<std::string, bool> output_on_gpu_;
+  const std::unordered_map<std::string, bool>& output_on_gpu_;
   Status infer_status_;
-
-  size_t step_idx_;
 };
 
 // EnsembleContext maintains the state of the ensemble request
@@ -303,7 +308,7 @@ EnsembleContext::ResponseAlloc(
     // If request output to be on GPU, check if it is preferred in respect to
     // the ensemble
     if ((memory_type != TRTSERVER_MEMORY_GPU) ||
-        (step->output_on_gpu_[tensor_name])) {
+        (step->output_on_gpu_.at(tensor_name))) {
       auto allocated_buffer =
           std::make_shared<AllocatedSystemMemory>(byte_size, memory_type);
 
@@ -516,23 +521,8 @@ EnsembleContext::InitStep(size_t step_idx, std::shared_ptr<Step>* step)
   }
 
   // Set requested outputs in request header
-  // and set meta data for output allocation
-  std::unordered_map<std::string, bool> output_on_gpu;
   for (const auto& pair : info_->steps_[step_idx].output_to_tensor_) {
     request_header.add_output()->set_name(pair.first);
-    bool prefer_gpu = false;
-    for (size_t next_step_idx : info_->tensor_to_step_[pair.first]) {
-      auto& next_step = info_->steps_[next_step_idx];
-      auto& next_step_version_map = handles_[next_step.model_name_];
-      auto& next_step_backend = next_step_version_map[next_step.model_version_];
-      // Set output_on_gpu depending on both the platform and whether the
-      // backend has contexts on GPU.
-      // [TODO] this check can be pre-calcuated on ensemble backend creation
-      if (BackendSupportGPUInput(next_step_backend)) {
-        prefer_gpu |= next_step_backend->HasGPUContext();
-      }
-    }
-    output_on_gpu.emplace(pair.first, prefer_gpu);
   }
 
   request_header.set_correlation_id(correlation_id_);
@@ -540,9 +530,8 @@ EnsembleContext::InitStep(size_t step_idx, std::shared_ptr<Step>* step)
   request_header.set_batch_size((batch_size == 0 ? 1 : batch_size));
   RETURN_IF_ERROR(NormalizeRequestHeader(*backend, request_header));
 
-  step->reset(new Step(step_idx));
+  step->reset(new Step(step_idx, info_->steps_[step_idx].output_on_gpu_));
   (*step)->backend_ = backend;
-  (*step)->output_on_gpu_.swap(output_on_gpu);
   RETURN_IF_ERROR(InferRequestProvider::Create(
       info_->steps_[step_idx].model_name_,
       info_->steps_[step_idx].model_version_, request_header, input_map,
@@ -784,7 +773,34 @@ EnsembleScheduler::Create(
     InferenceServer* const server, const ModelConfig& config,
     std::unique_ptr<Scheduler>* scheduler)
 {
-  scheduler->reset(new EnsembleScheduler(server, config));
+  std::unique_ptr<EnsembleScheduler> local_scheduler(
+      new EnsembleScheduler(server, config));
+
+  // Set whether the outputs can be allocated in GPU memory
+  // Move this up, return status...
+  for (auto& step : local_scheduler->info_->steps_) {
+    std::unordered_map<std::string, bool> output_on_gpu;
+    for (const auto& pair : step.output_to_tensor_) {
+      bool prefer_gpu = false;
+      for (size_t next_step_idx :
+           local_scheduler->info_->tensor_to_step_[pair.first]) {
+        auto& next_step = local_scheduler->info_->steps_[next_step_idx];
+        std::shared_ptr<InferenceBackend> backend = nullptr;
+        RETURN_IF_ERROR(local_scheduler->is_->GetInferenceBackend(
+            next_step.model_name_, next_step.model_version_, &backend));
+
+        // Set output_on_gpu depending on both the platform and whether the
+        // backend has contexts on GPU.
+        if (BackendSupportGPUInput(backend)) {
+          prefer_gpu |= backend->HasGPUContext();
+        }
+      }
+      output_on_gpu.emplace(pair.first, prefer_gpu);
+    }
+    step.output_on_gpu_.swap(output_on_gpu);
+  }
+
+  *scheduler = std::move(local_scheduler);
   return Status::Success;
 }
 
