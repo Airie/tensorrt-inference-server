@@ -289,7 +289,6 @@ class Handler : public GRPCServer::HandlerBase {
   Handler(
       const std::string& name,
       const std::shared_ptr<TRTSERVER_Server>& trtserver, const char* server_id,
-      const std::shared_ptr<SharedMemoryBlockManager>& smb_manager,
       ServiceType* service, grpc::ServerCompletionQueue* cq,
       size_t max_state_bucket_count);
   virtual ~Handler();
@@ -348,7 +347,6 @@ class Handler : public GRPCServer::HandlerBase {
   const std::string name_;
   std::shared_ptr<TRTSERVER_Server> trtserver_;
   const char* const server_id_;
-  std::shared_ptr<SharedMemoryBlockManager> smb_manager_;
 
   ServiceType* service_;
   grpc::ServerCompletionQueue* cq_;
@@ -368,12 +366,10 @@ template <
     typename ResponseType>
 Handler<ServiceType, ServerResponderType, RequestType, ResponseType>::Handler(
     const std::string& name, const std::shared_ptr<TRTSERVER_Server>& trtserver,
-    const char* server_id,
-    const std::shared_ptr<SharedMemoryBlockManager>& smb_manager,
-    ServiceType* service, grpc::ServerCompletionQueue* cq,
-    size_t max_state_bucket_count)
+    const char* server_id, ServiceType* service,
+    grpc::ServerCompletionQueue* cq, size_t max_state_bucket_count)
     : name_(name), trtserver_(trtserver), server_id_(server_id),
-      smb_manager_(smb_manager), service_(service), cq_(cq),
+      service_(service), cq_(cq),
       max_state_bucket_count_(max_state_bucket_count)
 {
 }
@@ -448,12 +444,9 @@ class HealthHandler : public Handler<
   HealthHandler(
       const std::string& name,
       const std::shared_ptr<TRTSERVER_Server>& trtserver, const char* server_id,
-      const std::shared_ptr<SharedMemoryBlockManager>& smb_manager,
       GRPCService::AsyncService* service, grpc::ServerCompletionQueue* cq,
       size_t max_state_bucket_count)
-      : Handler(
-            name, trtserver, server_id, smb_manager, service, cq,
-            max_state_bucket_count)
+      : Handler(name, trtserver, server_id, service, cq, max_state_bucket_count)
   {
   }
 
@@ -541,12 +534,9 @@ class StatusHandler : public Handler<
   StatusHandler(
       const std::string& name,
       const std::shared_ptr<TRTSERVER_Server>& trtserver, const char* server_id,
-      const std::shared_ptr<SharedMemoryBlockManager>& smb_manager,
       GRPCService::AsyncService* service, grpc::ServerCompletionQueue* cq,
       size_t max_state_bucket_count)
-      : Handler(
-            name, trtserver, server_id, smb_manager, service, cq,
-            max_state_bucket_count)
+      : Handler(name, trtserver, server_id, service, cq, max_state_bucket_count)
   {
   }
 
@@ -821,8 +811,8 @@ class InferHandler : public Handler<
       GRPCService::AsyncService* service, grpc::ServerCompletionQueue* cq,
       size_t max_state_bucket_count)
       : Handler(
-            name, trtserver, server_id, smb_manager, service, cq,
-            max_state_bucket_count)
+            name, trtserver, server_id, service, cq, max_state_bucket_count),
+        smb_manager_(smb_manager)
   {
     // Create the allocator that will be used to allocate buffers for
     // the result tensors.
@@ -841,6 +831,7 @@ class InferHandler : public Handler<
       TRTSERVER_Server* server, TRTSERVER_InferenceResponse* response,
       void* userp);
 
+  std::shared_ptr<SharedMemoryBlockManager> smb_manager_;
   TRTSERVER_ResponseAllocator* allocator_;
 };
 
@@ -1037,8 +1028,8 @@ class StreamInferHandler
       GRPCService::AsyncService* service, grpc::ServerCompletionQueue* cq,
       size_t max_state_bucket_count)
       : Handler(
-            name, trtserver, server_id, smb_manager, service, cq,
-            max_state_bucket_count)
+            name, trtserver, server_id, service, cq, max_state_bucket_count),
+        smb_manager_(smb_manager)
   {
     // Create the allocator that will be used to allocate buffers for
     // the result tensors.
@@ -1058,6 +1049,7 @@ class StreamInferHandler
       void* userp);
   static void CompleteResponse(Handler::State* state);
 
+  std::shared_ptr<SharedMemoryBlockManager> smb_manager_;
   TRTSERVER_ResponseAllocator* allocator_;
 };
 
@@ -1343,12 +1335,9 @@ class ProfileHandler : public Handler<
   ProfileHandler(
       const std::string& name,
       const std::shared_ptr<TRTSERVER_Server>& trtserver, const char* server_id,
-      const std::shared_ptr<SharedMemoryBlockManager>& smb_manager,
       GRPCService::AsyncService* service, grpc::ServerCompletionQueue* cq,
       size_t max_state_bucket_count)
-      : Handler(
-            name, trtserver, server_id, smb_manager, service, cq,
-            max_state_bucket_count)
+      : Handler(name, trtserver, server_id, service, cq, max_state_bucket_count)
   {
   }
 
@@ -1422,12 +1411,9 @@ class ModelControlHandler
   ModelControlHandler(
       const std::string& name,
       const std::shared_ptr<TRTSERVER_Server>& trtserver, const char* server_id,
-      const std::shared_ptr<SharedMemoryBlockManager>& smb_manager,
       GRPCService::AsyncService* service, grpc::ServerCompletionQueue* cq,
       size_t max_state_bucket_count)
-      : Handler(
-            name, trtserver, server_id, smb_manager, service, cq,
-            max_state_bucket_count)
+      : Handler(name, trtserver, server_id, service, cq, max_state_bucket_count)
   {
   }
 
@@ -1514,14 +1500,17 @@ class SharedMemoryControlHandler
       GRPCService::AsyncService* service, grpc::ServerCompletionQueue* cq,
       size_t max_state_bucket_count)
       : Handler(
-            name, trtserver, server_id, smb_manager, service, cq,
-            max_state_bucket_count)
+            name, trtserver, server_id, service, cq, max_state_bucket_count),
+        smb_manager_(smb_manager)
   {
   }
 
  protected:
   void StartNewRequest() override;
   bool Process(State* state, bool rpc_ok) override;
+
+ private:
+  std::shared_ptr<SharedMemoryBlockManager> smb_manager_;
 };
 
 void
@@ -1684,16 +1673,16 @@ GRPCServer::Start()
   // Handler for health requests. A single thread processes all of
   // these requests.
   HealthHandler* hhealth = new HealthHandler(
-      "HealthHandler", server_, server_id_, smb_manager_, &service_,
-      health_cq_.get(), 2 /* max_state_bucket_count */);
+      "HealthHandler", server_, server_id_, &service_, health_cq_.get(),
+      2 /* max_state_bucket_count */);
   hhealth->Start(1 /* thread_cnt */);
   health_handler_.reset(hhealth);
 
   // Handler for status requests. A single thread processes all of
   // these requests.
   StatusHandler* hstatus = new StatusHandler(
-      "StatusHandler", server_, server_id_, smb_manager_, &service_,
-      status_cq_.get(), 2 /* max_state_bucket_count */);
+      "StatusHandler", server_, server_id_, &service_, status_cq_.get(),
+      2 /* max_state_bucket_count */);
   hstatus->Start(1 /* thread_cnt */);
   status_handler_.reset(hstatus);
 
@@ -1716,15 +1705,15 @@ GRPCServer::Start()
   // Handler for profile requests. A single thread processes all of
   // these requests.
   ProfileHandler* hprofile = new ProfileHandler(
-      "ProfileHandler", server_, server_id_, smb_manager_, &service_,
-      profile_cq_.get(), 2 /* max_state_bucket_count */);
+      "ProfileHandler", server_, server_id_, &service_, profile_cq_.get(),
+      2 /* max_state_bucket_count */);
   hprofile->Start(1 /* thread_cnt */);
   profile_handler_.reset(hprofile);
 
   // Handler for model-control requests. A single thread processes all
   // of these requests.
   ModelControlHandler* hmodelcontrol = new ModelControlHandler(
-      "ModelControlHandler", server_, server_id_, smb_manager_, &service_,
+      "ModelControlHandler", server_, server_id_, &service_,
       modelcontrol_cq_.get(), 2 /* max_state_bucket_count */);
   hmodelcontrol->Start(1 /* thread_cnt */);
   modelcontrol_handler_.reset(hmodelcontrol);
