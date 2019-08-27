@@ -27,6 +27,8 @@
 import sys
 import numpy as np
 from tensorrtserver.api import *
+if TRTIS_ENABLE_SHARED_MEMORY:
+    import tensorrtserver.shared_memory as shm
 import test_util as tu
 
 # unicode() doesn't exist on python3, for how we use it the
@@ -129,6 +131,17 @@ def infer_exact(tester, pf, tensor_shape, batch_size,
             input0_list.append(in0)
             input1_list.append(in1)
 
+        if TRTIS_ENABLE_SHARED_MEMORY:
+            input_byte_size = input0_list[0].nbytes * batch_size
+            output_byte_size = expected0_val_list[0].nbytes * batch_size
+            # create and register shared memory region for inputs and outputs
+            shm_ip_handle = shm.create_shared_memory_region("/inputs", input_byte_size * 2)
+            shm_op_handle = shm.create_shared_memory_region("/outputs", output_byte_size * 2)
+            # copy data into shared memory region for input values
+            shm.set_shared_memory_region(shm_ip_handle, 0, input0_list + input1_list)
+            shm.register("output_data", "/outputs", 0, output_byte_size * 2)
+            shm.register("input_data", "/inputs", 0, input_byte_size * 2)
+
         expected0_sort_idx = [ np.flip(np.argsort(x.flatten()), 0) for x in expected0_val_list ]
         expected1_sort_idx = [ np.flip(np.argsort(x.flatten()), 0) for x in expected1_val_list ]
 
@@ -142,24 +155,37 @@ def infer_exact(tester, pf, tensor_shape, batch_size,
             OUTPUT1 = "OUTPUT__1"
             INPUT0 = "INPUT__0"
             INPUT1 = "INPUT__1"
-        if "OUTPUT0" in outputs:
-            if output0_raw:
-                output_req[OUTPUT0] = InferContext.ResultFormat.RAW
-            else:
-                output_req[OUTPUT0] = (InferContext.ResultFormat.CLASS, num_classes)
-        if "OUTPUT1" in outputs:
-            if output1_raw:
-                output_req[OUTPUT1] = InferContext.ResultFormat.RAW
-            else:
-                output_req[OUTPUT1] = (InferContext.ResultFormat.CLASS, num_classes)
+        if TRTIS_ENABLE_SHARED_MEMORY:
+            if "OUTPUT0" in outputs:
+                    output_req[OUTPUT0] = (InferContext.ResultFormat.RAW, shm_op_handle, \
+                        0, output_byte_size)
+            if "OUTPUT1" in outputs:
+                    output_req[OUTPUT1] = (InferContext.ResultFormat.RAW, shm_op_handle, \
+                        output_byte_size, output_byte_size)
+        else:
+            if "OUTPUT0" in outputs:
+                if output0_raw:
+                    output_req[OUTPUT0] = InferContext.ResultFormat.RAW
+                else:
+                    output_req[OUTPUT0] = (InferContext.ResultFormat.CLASS, num_classes)
+            if "OUTPUT1" in outputs:
+                if output1_raw:
+                    output_req[OUTPUT1] = InferContext.ResultFormat.RAW
+                else:
+                    output_req[OUTPUT1] = (InferContext.ResultFormat.CLASS, num_classes)
 
 
         ctx = InferContext(config[0], config[1], model_name, model_version,
                            correlation_id=correlation_id, streaming=config[2],
                            verbose=True)
-        results = ctx.run(
-                { INPUT0 : input0_list, INPUT1 : input1_list },
-                output_req, batch_size)
+        if TRTIS_ENABLE_SHARED_MEMORY:
+            results = ctx.run(
+                    { INPUT0 : ("input_data", 0, input_byte_size), INPUT1 : ("input_data", input_byte_size, input_byte_size), },
+                    output_req, batch_size)
+        else:
+            results = ctx.run(
+                    { INPUT0 : input0_list, INPUT1 : input1_list },
+                    output_req, batch_size)
 
         if not skip_request_id_check:
             global _last_request_id
@@ -238,6 +264,22 @@ def infer_zero(tester, pf, batch_size, tensor_dtype, input_shapes, output_shapes
         input_dict = {}
         output_dict = {}
         expected_dict = {}
+
+        if TRTIS_ENABLE_SHARED_MEMORY:
+            input_byte_size = input0_list[0].nbytes * batch_size
+            output_byte_size = expected0_val_list[0].nbytes * batch_size
+            for io_num in range(io_cnt):
+                input_byte_size =
+            # create and register shared memory region for inputs and outputs
+            shm_ip_handle = shm.create_shared_memory_region("/inputs", input_byte_size * 2)
+            shm_op_handle = shm.create_shared_memory_region("/outputs", output_byte_size * 2)
+            # copy data into shared memory region for input values
+            shm.set_shared_memory_region(shm_ip_handle, 0, input0_list + input1_list)
+            shm.register("output_data", "/outputs", 0, output_byte_size * 2)
+            shm.register("input_data", "/inputs", 0, input_byte_size * 2)
+
+        input_byte_size = 0
+        output_byte_size = 0
 
         for io_num in range(io_cnt):
             if pf == "libtorch" or pf == "libtorch_nobatch":
